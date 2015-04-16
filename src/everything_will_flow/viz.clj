@@ -1,4 +1,6 @@
-(ns everything-will-flow.core
+(ns everything-will-flow.viz
+  (:require
+    [clojure.java.io :as io])
   (:import
     [java.awt
      Toolkit
@@ -72,17 +74,70 @@
        (java.awt.EventQueue/invokeLater
          #(send-to-front frame)))))
 
+(defn save-image
+  [filename image]
+  (ImageIO/write image "png" (io/file filename)))
+
 (defn ->hsv [t]
-  (if (zero? t)
-    (Color/getHSBColor 0 0 0)
+  (let [t (-> t (max 0) (min 1))]
     (Color/getHSBColor
-      (- 0.75 (* 0.85 t))
+      (- 0.75 (* 0.7 t))
       1
-      1)))
+      (max 0.4
+        (cond
+          #_(zero? t)
+          #_0.0
+
+          (< t 0.05)
+          (/ t 0.05)
+
+          :else
+          1)))))
 
 (defn create-image [w h f]
   (let [image (BufferedImage. w h BufferedImage/TYPE_INT_RGB)]
     (dotimes [x w]
       (dotimes [y h]
-        (.setRGB image x y (.getRGB ^Color (f x y)))))
+        (.setRGB image x y (.getRGB ^Color (f x (- h y))))))
     image))
+
+;;;
+
+(defn rate-seq [resolution timestamps]
+  (let [bucket->timestamps (group-by #(int (/ % resolution)) timestamps)]
+    (->> (->> bucket->timestamps keys (apply max) inc range)
+      (mapv #(vector % (-> % bucket->timestamps count))))))
+
+(defn distribution-seq [resolution values]
+  (let [bucket->values (group-by #(int (/ (first %) resolution)) values)]
+    (->> (->> bucket->values keys (apply max) inc range)
+      (mapv #(vector % (->> % bucket->values (map second)))))))
+
+;;;
+
+(defn normalize-distribution [y-res values]
+  (let [cnt (count values)]
+    (->> (rate-seq y-res values)
+      (mapv #(/ (second %) cnt)))))
+
+(defn log10 [values]
+  (map (fn [[k v]] [k (Math/log10 (+ v 1))]) values))
+
+(defn log [values]
+  (map (fn [[k v]] [k (Math/log (+ v 1))]) values))
+
+(defn spectrogram [x-res y-res magnify height values]
+  (let [slices (->> (distribution-seq x-res values)
+                 (map second)
+                 (mapv (partial normalize-distribution y-res)))
+        w (count slices)
+        h (max height (->> slices (map count) (apply max)))
+        ;;max (->> slices (apply concat) (apply max))
+        ]
+    (create-image (* magnify w) (* magnify h)
+      (fn [x y]
+        (let [y (int (/ y magnify))
+              x (int (/ x magnify))]
+          (->hsv
+            (/ (-> slices (nth x) (nth y 0))
+              (apply max (nth slices x)))))))))
